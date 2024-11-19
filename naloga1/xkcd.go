@@ -20,7 +20,6 @@ type Beseda struct {
 }
 
 type voz struct {
-	levo   *voz
 	desno  *voz
 	beseda Beseda
 }
