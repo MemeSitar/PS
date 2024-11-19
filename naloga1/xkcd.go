@@ -1,7 +1,7 @@
 package main
 
 import (
-	"container/heap"
+	"flag"
 	"fmt"
 	"regexp"
 	"strings"
@@ -19,71 +19,49 @@ type Beseda struct {
 	val int
 }
 
-type MaxHeap []Beseda
-
-func (h MaxHeap) Len() int           { return len(h) }
-func (h MaxHeap) Less(i, j int) bool { return h[i].val > h[j].val }
-func (h MaxHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-
-func (h *MaxHeap) Push(x any) {
-	*h = append(*h, x.(Beseda))
-	// Bubble up to maintain heap property
-	i := h.Len() - 1
-	for i > 0 {
-		parent := (i - 1) / 2
-		if (*h)[i].val <= (*h)[parent].val {
-			break
-		}
-		(*h)[i], (*h)[parent] = (*h)[parent], (*h)[i]
-		i = parent
-	}
+type voz struct {
+	levo   *voz
+	desno  *voz
+	beseda Beseda
 }
 
-func (h *MaxHeap) Pop() any {
-	old := *h
-	n := len(old)
-	if n == 0 {
-		return nil
+func (v *voz) Spucaj(meja int) *voz {
+	tukaj := v
+	for i := 0; i < meja && tukaj.desno != nil; i++ {
+		tukaj = tukaj.desno
+	}
+	tukaj.desno = nil
+	return v
+}
+
+func (v *voz) Dodaj(b Beseda) *voz {
+	novo := &voz{beseda: b}
+	//fmt.Println("Dodajam", b)
+	if v == nil {
+		//fmt.Println("v = nil, začenjam nov seznam.")
+		v = novo
+		return v
+	}
+	// beseda na začetek seznama
+	if v.beseda.val <= novo.beseda.val {
+		novo.desno = v
+		return novo
 	}
 
-	// The last element becomes the new root
-	item := old[0]    // This is the root (element to pop)
-	*h = old[0 : n-1] // Shrink the heap
-
-	if n == 1 {
-		return item // If there's only one element, no need to bubble down
+	tukaj := v
+	for tukaj.desno != nil && tukaj.desno.beseda.val > novo.beseda.val {
+		tukaj = tukaj.desno
 	}
+	novo.desno = tukaj.desno
+	tukaj.desno = novo
+	return v
+}
 
-	// Move the last element to the root
-	(*h)[0] = old[n-1]
-
-	// Bubble down the new root to restore heap property
-	i := 0
-	for {
-		left := 2*i + 1
-		right := 2*i + 2
-		largest := i
-
-		// Compare with left child
-		if left < n-1 && (*h)[left].val > (*h)[largest].val {
-			largest = left
-		}
-
-		// Compare with right child
-		if right < n-1 && (*h)[right].val > (*h)[largest].val {
-			largest = right
-		}
-
-		if largest == i {
-			break
-		}
-
-		// Swap with the larger child
-		(*h)[i], (*h)[largest] = (*h)[largest], (*h)[i]
-		i = largest
+func (v voz) PrintN(n int) {
+	for i := 0; i < n && v.desno != nil; i++ {
+		fmt.Println(v.beseda.key, ":", v.beseda.val)
+		v = *v.desno
 	}
-
-	return item // Return the popped root element
 }
 
 func worker(id int, hopsize int, lastid int) {
@@ -96,7 +74,6 @@ func worker(id int, hopsize int, lastid int) {
 		comic, err := xkcd.FetchComic(com)
 		nit := ""
 		if err == nil {
-			//fmt.Println(comic.Title)
 			if comic.Transcript == "" {
 				nit = comic.Title + " " + comic.Tooltip
 			} else {
@@ -131,58 +108,28 @@ func getLastId() int {
 }
 
 func main() {
+	wPtr := flag.Int("w", 500, "Število delavcev")
+	nPtr := flag.Int("n", 15, "Število izpisanih besed")
+	flag.Parse()
 	lastid := getLastId()
-	hopsize := 500
-	//var slovar = make(map[string]int)
+	hopsize := *wPtr
 	for i := 0; i < hopsize; i++ {
 		wg.Add(1)
 		go worker(i, hopsize, lastid)
 	}
 	wg.Wait()
-	fmt.Println("------------------------------------")
-	// izpis rezultatov
 
-	h := &MaxHeap{}
-	heap.Init(h)
+	// razvrščanje rezultatov
+	var glava *voz
+	i := 0
 	for key, value := range mainDict {
-		//fmt.Println(isMaxHeap(h))
-		if value > 100 {
-
-			//fmt.Printf("Word: %s, Count: %d\n", key, value)
-		}
-		h.Push(Beseda{key, value})
-		/*fmt.Println("Heap after pushing:")
-		for _, item := range *h {
-			fmt.Printf("Word: %s, Count: %d\n", item.key, item.val)
-		}*/
-	}
-	for i := 0; i < 10; i++ {
-
-		beseda := h.Pop().(Beseda)
-		fmt.Println(beseda.key, ":", beseda.val)
-		//fmt.Println(isMaxHeap(h))
-	}
-	/*
-		maxval := 0
-		for key, value := range mainDict {
-			if value > maxval {
-				maxval = value
-				fmt.Printf("'%s': %d\n", key, value)
-			}
-		}*/
-}
-
-func isMaxHeap(h *MaxHeap) bool {
-	n := len(*h)
-	for i := 0; i < n; i++ {
-		left := 2*i + 1
-		right := 2*i + 2
-		if left < n && (*h)[i].val < (*h)[left].val {
-			return false
-		}
-		if right < n && (*h)[i].val < (*h)[right].val {
-			return false
+		glava = glava.Dodaj(Beseda{key, value})
+		i++
+		// periodično zmanjšam seznam da ni potrebno sprehajanje čez celoten seznam.
+		if i%73 == 0 {
+			glava.Spucaj(*nPtr)
 		}
 	}
-	return true
+	// izpis rezultatov
+	glava.PrintN(*nPtr)
 }
