@@ -24,7 +24,6 @@ var Red = "\033[31m"
 // global flags
 var loglevelPtr = flag.Int("l", 0, "set log level")
 var pollingPtr = flag.Int("poll", 20, "set polling time of controller")
-var wnumPtr = flag.Int("w", 10, "set worker number")
 
 var wg sync.WaitGroup
 var re = regexp.MustCompile(`\b[a-zA-Z0-9]{4,}\b`)
@@ -40,7 +39,7 @@ func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
 	for {
 		todo := make([]Entry, 0)
 		current = <-kanal
-		if *loglevelPtr == 1 {
+		if *loglevelPtr > 5 {
 			w.Println(id, "processing task", current.Id)
 		}
 
@@ -52,7 +51,7 @@ func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
 			todo = append(todo, Entry{current.Id, word})
 		}
 		if len(words) > 0 && lock.TryLock() {
-			if *loglevelPtr == 2 {
+			if *loglevelPtr > 5 {
 				w.Println(id, "successfully locked, copying:", len(todo))
 			}
 			for len(todo) > 0 {
@@ -67,11 +66,11 @@ func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
 		case <-stop:
 			if len(todo) > 0 {
 
-				if *loglevelPtr == 2 {
+				if *loglevelPtr > 3 {
 					w.Println(id, "got stop signal, clearing task list.")
 				}
 				lock.Lock()
-				if *loglevelPtr == 2 {
+				if *loglevelPtr > 3 {
 					w.Println(id, "successfully locked, copying:", len(todo))
 				}
 				for len(todo) > 0 {
@@ -82,13 +81,13 @@ func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
 
 				lock.Unlock()
 
-				if *loglevelPtr == 2 {
+				if *loglevelPtr > 3 {
 					w.Println(id, "task list cleared, terminating.")
 				}
 				return
 			} else {
 
-				if *loglevelPtr == 2 {
+				if *loglevelPtr > 3 {
 					w.Println(id, "Got stop signal, terminating.")
 				}
 				return
@@ -104,6 +103,7 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 	defer wg.Done()
 	timer := 0
 	workerNum := 1
+	uid := 1
 
 	var stop = make(chan int)
 	// create the first worker
@@ -114,7 +114,7 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 	}*/
 
 	wg.Add(1)
-	go worker(1, kanal, stop)
+	go worker(uid, kanal, stop)
 	// start the main loop
 	prev := 0
 	diff := 0
@@ -127,14 +127,17 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 		// test if we are exiting program
 		select {
 		case <-quitChan:
-			fmt.Println("CONTROLLER RECEIVED SIGNAL")
+			if *loglevelPtr > 1 {
+
+				c.Println("received quit signal, stopping", workerNum, "workers.")
+			}
 			for i := 0; i < workerNum; i++ {
 				stop <- 1
 			}
 			return
 		default:
 			// debug prints to see the performance
-			if *loglevelPtr == 3 {
+			if *loglevelPtr > 2 {
 				if tmp > 9500 {
 					c.Printf("%scurrent diff: %5d current len: %d%s\n", Red, diff, tmp, Reset)
 				} else {
@@ -148,7 +151,7 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 
 		// dinamično dodajanje/odstranjevanje
 		if diff > 500 && timer == 0 && workerNum < upperLimit {
-			if *loglevelPtr > 1 {
+			if *loglevelPtr > 2 {
 				c.Println("adding", diff/100, "workers. Current workers:", workerNum)
 			}
 			timer = 5
@@ -158,7 +161,7 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 				go worker(workerNum, kanal, stop)
 			}
 		} else if diff < -500 && timer == 0 {
-			if *loglevelPtr > 1 {
+			if *loglevelPtr > 2 {
 				c.Println("removing", diff/500*-1, "workers. Current workers:", workerNum)
 			}
 			timer = 5
@@ -219,3 +222,21 @@ func main() {
 	//fmt.Println(slovar)
 	//lock.Unlock()
 }
+
+/* LOG LEVELS:
+# log level 0
+Only print main function. Starting parameters and final results.
+
+# log level 1
+Output state of queue. Simple evaluation of how it's changing. RED if bad.
+
+# log level 2
+Output dynamic management of controller. How it is adding and removing workers.
+
+# log level 3
+Output basic worker state, locking.
+
+# log level 4
+Output worker's tasks.
+
+*/
