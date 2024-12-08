@@ -19,6 +19,7 @@ var Red = "\033[31m"
 // global flags
 var loglevelPtr = flag.Int("l", 0, "set log level")
 var pollingPtr = flag.Int("poll", 20, "set polling time of controller")
+var maxWorkersPtr = flag.Int("wmax", 80, "max number of workers")
 
 var wg sync.WaitGroup
 var re = regexp.MustCompile(`\b[a-zA-Z0-9]{4,}\b`)
@@ -135,7 +136,7 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 	defer wg.Done()
 	timer := 0
 	var stop = make(chan int)
-	var WP = WorkerPool{0, 0, 50, stop, kanal}
+	var WP = WorkerPool{0, 0, *maxWorkersPtr, stop, kanal}
 	WP.addWorker(1)
 
 	// start the main loop
@@ -170,7 +171,13 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 		}
 
 		// dinamično dodajanje/odstranjevanje
-		if diff > 500 && timer == 0 {
+		if tmp > 9500 {
+			if *loglevelPtr > 1 {
+				c.Println("adding", 10, "workers. Current workers:", WP.WorkerNum)
+			}
+			timer = 5
+			WP.addWorker(10)
+		} else if diff > 100 && timer == 0 {
 			if *loglevelPtr > 1 {
 				c.Println("adding", diff/100, "workers. Current workers:", WP.WorkerNum)
 			}
@@ -182,12 +189,6 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 			}
 			timer = 5
 			WP.removeWorker(diff / 500 * -1)
-		} else if tmp > 9500 {
-			if *loglevelPtr > 1 {
-				c.Println("adding", 10, "workers. Current workers:", WP.WorkerNum)
-			}
-			timer = 5
-			WP.addWorker(10)
 		}
 
 	}
@@ -196,11 +197,13 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 func main() {
 	var tPtr = flag.Int("t", 10, "delay between tasks")
 	flag.Parse()
-
+	fmt.Println("Logging level of:", *loglevelPtr)
+	fmt.Println("Polling of controller:", *pollingPtr)
+	fmt.Println("Max number of workers:", *maxWorkersPtr)
 	// Definiramo nov generator
 	var producer socialNetwork.Q
 	// Inicializiramo generator. Parameter določa zakasnitev med zahtevki
-	fmt.Println("Producer with delay of", *tPtr*100)
+	fmt.Println("Producer with delay of:", *tPtr*100)
 	producer.New(*tPtr * 100)
 
 	var stopController = make(chan int)
