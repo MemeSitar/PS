@@ -12,12 +12,33 @@ import (
 	"time"
 )
 
+// colors
+var Reset = "\033[0m"
+var Red = "\033[31m"
+
+// global flags
+var loglevelPtr = flag.Int("l", 0, "set log level")
+var pollingPtr = flag.Int("poll", 20, "set polling time of controller")
+
+var wg sync.WaitGroup
+var re = regexp.MustCompile(`\b[a-zA-Z0-9]{4,}\b`)
+var w = log.New(os.Stderr, "WORKER: ", 0)
+var c = log.New(os.Stderr, "CONTROLLER: ", 0)
+
+var lock sync.Mutex
+var slovar = make(map[string][]uint64)
+
 type WorkerPool struct {
 	Uid       int
 	WorkerNum int
 	WorkerMax int
 	StopChan  chan int
 	TaskChan  chan socialNetwork.Task
+}
+
+type Entry struct {
+	Id   uint64
+	Word string
 }
 
 func (WP *WorkerPool) addWorker(num int) int {
@@ -43,27 +64,6 @@ func (WP *WorkerPool) stopAll() {
 		WP.StopChan <- 1
 	}
 }
-
-type Entry struct {
-	Id   uint64
-	Word string
-}
-
-// colors
-var Reset = "\033[0m"
-var Red = "\033[31m"
-
-// global flags
-var loglevelPtr = flag.Int("l", 0, "set log level")
-var pollingPtr = flag.Int("poll", 20, "set polling time of controller")
-
-var wg sync.WaitGroup
-var re = regexp.MustCompile(`\b[a-zA-Z0-9]{4,}\b`)
-var w = log.New(os.Stderr, "WORKER: ", 0)
-var c = log.New(os.Stderr, "CONTROLLER: ", 0)
-
-var lock sync.Mutex
-var slovar = make(map[string][]uint64)
 
 func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
 	defer wg.Done()
