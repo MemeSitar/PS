@@ -12,6 +12,38 @@ import (
 	"time"
 )
 
+type WorkerPool struct {
+	Uid       int
+	WorkerNum int
+	WorkerMax int
+	StopChan  chan int
+	TaskChan  chan socialNetwork.Task
+}
+
+func (WP *WorkerPool) addWorker(num int) int {
+	for i := 0; i < num && WP.WorkerNum < WP.WorkerMax; i++ {
+		WP.Uid++
+		wg.Add(1)
+		go worker(WP.Uid, WP.TaskChan, WP.StopChan)
+		WP.WorkerNum++
+	}
+	return WP.WorkerNum
+}
+
+func (WP *WorkerPool) removeWorker(num int) int {
+	for i := 0; i < num && WP.WorkerNum > 1; i++ {
+		WP.StopChan <- 1
+		WP.WorkerNum--
+	}
+	return WP.WorkerNum
+}
+
+func (WP *WorkerPool) stopAll() {
+	for ; WP.WorkerNum > 0; WP.WorkerNum-- {
+		WP.StopChan <- 1
+	}
+}
+
 type Entry struct {
 	Id   uint64
 	Word string
@@ -29,7 +61,7 @@ var wg sync.WaitGroup
 var re = regexp.MustCompile(`\b[a-zA-Z0-9]{4,}\b`)
 var w = log.New(os.Stderr, "WORKER: ", 0)
 var c = log.New(os.Stderr, "CONTROLLER: ", 0)
-var upperLimit = 50
+
 var lock sync.Mutex
 var slovar = make(map[string][]uint64)
 
@@ -102,19 +134,10 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 	wg.Add(1)
 	defer wg.Done()
 	timer := 0
-	workerNum := 1
-	uid := 1
-
 	var stop = make(chan int)
-	// create the first worker
-	/*fmt.Println("Starting", *wnumPtr, "workers.")
-	for i := 0; i < *wnumPtr; i++ {
-		wg.Add(1)
-		go worker(i, kanal, stop)
-	}*/
+	var WP = WorkerPool{0, 0, 50, stop, kanal}
+	WP.addWorker(1)
 
-	wg.Add(1)
-	go worker(uid, kanal, stop)
 	// start the main loop
 	prev := 0
 	diff := 0
@@ -127,17 +150,14 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 		// test if we are exiting program
 		select {
 		case <-quitChan:
-			if *loglevelPtr > 1 {
-
-				c.Println("received quit signal, stopping", workerNum, "workers.")
+			if *loglevelPtr > 0 {
+				c.Println("received quit signal, stopping", WP.WorkerNum, "workers.")
 			}
-			for i := 0; i < workerNum; i++ {
-				stop <- 1
-			}
+			WP.stopAll()
 			return
 		default:
 			// debug prints to see the performance
-			if *loglevelPtr > 2 {
+			if *loglevelPtr > 0 {
 				if tmp > 9500 {
 					c.Printf("%scurrent diff: %5d current len: %d%s\n", Red, diff, tmp, Reset)
 				} else {
@@ -150,35 +170,24 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 		}
 
 		// dinamično dodajanje/odstranjevanje
-		if diff > 500 && timer == 0 && workerNum < upperLimit {
-			if *loglevelPtr > 2 {
-				c.Println("adding", diff/100, "workers. Current workers:", workerNum)
+		if diff > 500 && timer == 0 {
+			if *loglevelPtr > 1 {
+				c.Println("adding", diff/100, "workers. Current workers:", WP.WorkerNum)
 			}
 			timer = 5
-			for i := 0; i < diff/100; i++ {
-				workerNum++
-				wg.Add(1)
-				go worker(workerNum, kanal, stop)
-			}
+			WP.addWorker(diff / 100)
 		} else if diff < -500 && timer == 0 {
-			if *loglevelPtr > 2 {
-				c.Println("removing", diff/500*-1, "workers. Current workers:", workerNum)
+			if *loglevelPtr > 1 {
+				c.Println("removing", diff/500*-1, "workers. Current workers:", WP.WorkerNum)
 			}
 			timer = 5
-			for i := 0; i < diff/500*-1; i++ {
-				if workerNum == 1 {
-					break
-				}
-				stop <- 1
-				workerNum--
+			WP.removeWorker(diff / 500 * -1)
+		} else if tmp > 9500 {
+			if *loglevelPtr > 1 {
+				c.Println("adding", 10, "workers. Current workers:", WP.WorkerNum)
 			}
-		} else if tmp > 9500 && workerNum < upperLimit {
 			timer = 5
-			for i := 0; i < 10; i++ {
-				workerNum++
-				wg.Add(1)
-				go worker(workerNum, kanal, stop)
-			}
+			WP.addWorker(10)
 		}
 
 	}
