@@ -13,58 +13,30 @@ import (
 )
 
 // colors
-var Reset = "\033[0m"
-var Red = "\033[31m"
+var RESET = "\033[0m"
+var RED = "\033[31m"
 
 // global flags
 var loglevelPtr = flag.Int("l", 0, "set log level")
 var pollingPtr = flag.Int("poll", 20, "set polling time of controller")
 var maxWorkersPtr = flag.Int("wmax", 80, "max number of workers")
 var shardNumPtr = flag.Int("shards", 1, "number of shards")
+var tPtr = flag.Int("t", 10, "delay between tasks")
 
 var wg sync.WaitGroup
 var re = regexp.MustCompile(`\b[a-zA-Z0-9]{4,}\b`)
 var w = log.New(os.Stderr, "WORKER: ", 0)
 var c = log.New(os.Stderr, "CONTROLLER: ", 0)
+var slovar Slovar
 
-var slovArr []map[string][]uint64
-var slovarLock []sync.Mutex
-
-type WorkerPool struct {
-	Uid       int
-	WorkerNum int
-	WorkerMax int
-	StopChan  chan int
-	TaskChan  chan socialNetwork.Task
+type Slovar struct {
+	arr  []map[string][]uint64
+	lock []sync.Mutex
 }
 
 type Entry struct {
 	Id   uint64
 	Word string
-}
-
-func (WP *WorkerPool) addWorker(num int) int {
-	for i := 0; i < num && WP.WorkerNum < WP.WorkerMax; i++ {
-		WP.Uid++
-		wg.Add(1)
-		go worker(WP.Uid, WP.TaskChan, WP.StopChan)
-		WP.WorkerNum++
-	}
-	return WP.WorkerNum
-}
-
-func (WP *WorkerPool) removeWorker(num int) int {
-	for i := 0; i < num && WP.WorkerNum > 1; i++ {
-		WP.StopChan <- 1
-		WP.WorkerNum--
-	}
-	return WP.WorkerNum
-}
-
-func (WP *WorkerPool) stopAll() {
-	for ; WP.WorkerNum > 0; WP.WorkerNum-- {
-		WP.StopChan <- 1
-	}
 }
 
 func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
@@ -79,19 +51,19 @@ func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
 			}
 			for x, arr := range todo {
 				if len(arr) > 0 {
-					slovarLock[x].Lock()
+					slovar.lock[x].Lock()
 					if *loglevelPtr > 3 {
 						w.Println(id, "successfully locked shard", x, "copying:", len(arr))
 					}
 					for len(arr) > 0 {
 						popped := arr[len(arr)-1]
-						slovArr[x][popped.Word] = append(slovArr[x][popped.Word], popped.Id)
+						slovar.arr[x][popped.Word] = append(slovar.arr[x][popped.Word], popped.Id)
 						arr = arr[:len(arr)-1]
 					}
 					if *loglevelPtr > 3 {
 						w.Println(id, "unlocking shard", x, "current:", len(arr))
 					}
-					slovarLock[x].Unlock()
+					slovar.lock[x].Unlock()
 					todo[x] = make([]Entry, 0)
 				}
 			}
@@ -112,16 +84,16 @@ func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
 			todo[current.Id%uint64(*shardNumPtr)] = append(todo[current.Id%uint64(*shardNumPtr)], Entry{current.Id, word})
 		}
 		for x, arr := range todo {
-			if len(arr) > 0 && slovarLock[x].TryLock() {
+			if len(arr) > 0 && slovar.lock[x].TryLock() {
 				if *loglevelPtr > 4 {
 					w.Println(id, "successfully locked shard", x, "copying:", len(arr))
 				}
 				for len(arr) > 0 {
 					popped := arr[len(arr)-1]
-					slovArr[x][popped.Word] = append(slovArr[x][popped.Word], popped.Id)
+					slovar.arr[x][popped.Word] = append(slovar.arr[x][popped.Word], popped.Id)
 					arr = arr[:len(arr)-1]
 				}
-				slovarLock[x].Unlock()
+				slovar.lock[x].Unlock()
 				todo[x] = make([]Entry, 0)
 			} else if *loglevelPtr > 4 && len(arr) > 0 {
 				w.Println(id, "couldn't lock shard", x, "keeping:", len(arr))
@@ -130,7 +102,7 @@ func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
 	}
 }
 
-func controller(kanal chan socialNetwork.Task, quitChan chan int) {
+func controller(kanal chan socialNetwork.Task, quit chan int) {
 	wg.Add(1)
 	defer wg.Done()
 	timer := 0
@@ -149,7 +121,7 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 
 		// test if we are exiting program
 		select {
-		case <-quitChan:
+		case <-quit:
 			if *loglevelPtr > 0 {
 				c.Println("received quit signal, stopping", WP.WorkerNum, "workers.")
 			}
@@ -159,7 +131,7 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 			// debug prints to see the performance
 			if *loglevelPtr > 0 {
 				if tmp > 9500 {
-					c.Printf("%scurrent diff: %5d current len: %d%s\n", Red, diff, tmp, Reset)
+					c.Printf("%scurrent diff: %5d current len: %d%s\n", RED, diff, tmp, RESET)
 				} else {
 					c.Printf("current diff: %5d current len: %d\n", diff, tmp)
 				}
@@ -194,23 +166,18 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 }
 
 func main() {
-	var tPtr = flag.Int("t", 10, "delay between tasks")
 	flag.Parse()
-
-	fmt.Println("Logging level of:", *loglevelPtr)
-	fmt.Println("Polling of controller:", *pollingPtr)
-	fmt.Println("Max number of workers:", *maxWorkersPtr)
-	fmt.Println("Number of map shards:", *shardNumPtr)
-
-	slovArr = make([]map[string][]uint64, *shardNumPtr)
+	printFlags()
+	slovar = Slovar{make([]map[string][]uint64, *shardNumPtr), make([]sync.Mutex, *shardNumPtr)}
+	slovar.arr = make([]map[string][]uint64, *shardNumPtr)
 	for i := 0; i < *shardNumPtr; i++ {
-		slovArr[i] = make(map[string][]uint64)
+		slovar.arr[i] = make(map[string][]uint64)
 	}
-	slovarLock = make([]sync.Mutex, *shardNumPtr)
+	slovar.lock = make([]sync.Mutex, *shardNumPtr)
 	// Definiramo nov generator
 	var producer socialNetwork.Q
 	// Inicializiramo generator. Parameter določa zakasnitev med zahtevki
-	fmt.Println("Producer with delay of:", *tPtr*100)
+
 	producer.New(*tPtr * 100)
 
 	var stopController = make(chan int)
@@ -237,9 +204,9 @@ func main() {
 	fmt.Printf("Average queue length: %.2f %%\n", producer.GetAverageQueueLength())
 	// Izpišemo največjo dolžino vrste v čakalnici
 	fmt.Printf("Max queue length %.2f %%\n", producer.GetMaxQueueLength())
-	//lock.Lock()
-	//fmt.Println(slovar)
-	//lock.Unlock()
+	for _, arr := range slovar.arr {
+		fmt.Println(arr)
+	}
 }
 
 /* LOG LEVELS:
