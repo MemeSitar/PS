@@ -204,14 +204,19 @@ func main() {
 	fmt.Printf("Average queue length: %.2f %%\n", producer.GetAverageQueueLength())
 	// Izpišemo največjo dolžino vrste v čakalnici
 	fmt.Printf("Max queue length %.2f %%\n", producer.GetMaxQueueLength())
-	for _, arr := range slovar.arr {
-		fmt.Println(arr)
+
+	if *loglevelPtr == -1 {
+		printResults()
+		fmt.Println(query("zero"))
 	}
 }
 
 /* LOG LEVELS:
+# log level -1
+Only print the resulting map (or maps)
+
 # log level 0
-Only print main function. Starting parameters and final results.
+Only print main function. Starting parameters and final results. Default.
 
 # log level 1
 Output state of queue. Simple evaluation of how it's changing. RED if bad.
