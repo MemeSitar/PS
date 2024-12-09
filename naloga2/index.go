@@ -7,7 +7,6 @@ import (
 	"os"
 	"q-index/socialNetwork"
 	"regexp"
-	"runtime/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -22,8 +21,6 @@ var loglevelPtr = flag.Int("l", 0, "set log level")
 var pollingPtr = flag.Int("poll", 20, "set polling time of controller")
 var maxWorkersPtr = flag.Int("wmax", 80, "max number of workers")
 var shardNumPtr = flag.Int("shards", 1, "number of shards")
-
-var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
 var wg sync.WaitGroup
 var re = regexp.MustCompile(`\b[a-zA-Z0-9]{4,}\b`)
@@ -199,16 +196,6 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 func main() {
 	var tPtr = flag.Int("t", 10, "delay between tasks")
 	flag.Parse()
-
-	flag.Parse()
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		pprof.StartCPUProfile(f)
-		defer pprof.StopCPUProfile()
-	}
 
 	fmt.Println("Logging level of:", *loglevelPtr)
 	fmt.Println("Polling of controller:", *pollingPtr)
