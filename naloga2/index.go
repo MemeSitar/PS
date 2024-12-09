@@ -7,6 +7,7 @@ import (
 	"os"
 	"q-index/socialNetwork"
 	"regexp"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -20,14 +21,17 @@ var Red = "\033[31m"
 var loglevelPtr = flag.Int("l", 0, "set log level")
 var pollingPtr = flag.Int("poll", 20, "set polling time of controller")
 var maxWorkersPtr = flag.Int("wmax", 80, "max number of workers")
+var shardNumPtr = flag.Int("shards", 1, "number of shards")
+
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
 var wg sync.WaitGroup
 var re = regexp.MustCompile(`\b[a-zA-Z0-9]{4,}\b`)
 var w = log.New(os.Stderr, "WORKER: ", 0)
 var c = log.New(os.Stderr, "CONTROLLER: ", 0)
 
-var lock sync.Mutex
-var slovar = make(map[string][]uint64)
+var slovArr []map[string][]uint64
+var slovarLock []sync.Mutex
 
 type WorkerPool struct {
 	Uid       int
@@ -69,8 +73,35 @@ func (WP *WorkerPool) stopAll() {
 func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
 	defer wg.Done()
 	var current socialNetwork.Task
+	todo := make([][]Entry, *shardNumPtr)
 	for {
-		todo := make([]Entry, 0)
+		select {
+		case <-stop:
+			if *loglevelPtr > 3 {
+				w.Println(id, "got stop signal, clearing task list.")
+			}
+			for x, arr := range todo {
+				if len(arr) > 0 {
+					slovarLock[x].Lock()
+					if *loglevelPtr > 3 {
+						w.Println(id, "successfully locked shard", x, "copying:", len(arr))
+					}
+					for len(arr) > 0 {
+						popped := arr[len(arr)-1]
+						slovArr[x][popped.Word] = append(slovArr[x][popped.Word], popped.Id)
+						arr = arr[:len(arr)-1]
+					}
+					if *loglevelPtr > 3 {
+						w.Println(id, "unlocking shard", x, "current:", len(arr))
+					}
+					slovarLock[x].Unlock()
+					todo[x] = make([]Entry, 0)
+				}
+			}
+			return
+		default:
+
+		}
 		current = <-kanal
 		if *loglevelPtr > 5 {
 			w.Println(id, "processing task", current.Id)
@@ -81,52 +112,23 @@ func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
 		// čez vse besede tolower in dodaj v slovar
 		for _, word := range words {
 			word = strings.ToLower(word)
-			todo = append(todo, Entry{current.Id, word})
+			todo[current.Id%uint64(*shardNumPtr)] = append(todo[current.Id%uint64(*shardNumPtr)], Entry{current.Id, word})
 		}
-		if len(words) > 0 && lock.TryLock() {
-			if *loglevelPtr > 5 {
-				w.Println(id, "successfully locked, copying:", len(todo))
+		for x, arr := range todo {
+			if len(arr) > 0 && slovarLock[x].TryLock() {
+				if *loglevelPtr > 4 {
+					w.Println(id, "successfully locked shard", x, "copying:", len(arr))
+				}
+				for len(arr) > 0 {
+					popped := arr[len(arr)-1]
+					slovArr[x][popped.Word] = append(slovArr[x][popped.Word], popped.Id)
+					arr = arr[:len(arr)-1]
+				}
+				slovarLock[x].Unlock()
+				todo[x] = make([]Entry, 0)
+			} else if *loglevelPtr > 4 && len(arr) > 0 {
+				w.Println(id, "couldn't lock shard", x, "keeping:", len(arr))
 			}
-			for len(todo) > 0 {
-				popped := todo[len(todo)-1]
-				slovar[popped.Word] = append(slovar[popped.Word], popped.Id)
-				todo = todo[:len(todo)-1]
-			}
-
-			lock.Unlock()
-		}
-		select {
-		case <-stop:
-			if len(todo) > 0 {
-
-				if *loglevelPtr > 3 {
-					w.Println(id, "got stop signal, clearing task list.")
-				}
-				lock.Lock()
-				if *loglevelPtr > 3 {
-					w.Println(id, "successfully locked, copying:", len(todo))
-				}
-				for len(todo) > 0 {
-					popped := todo[len(todo)-1]
-					slovar[popped.Word] = append(slovar[popped.Word], popped.Id)
-					todo = todo[:len(todo)-1]
-				}
-
-				lock.Unlock()
-
-				if *loglevelPtr > 3 {
-					w.Println(id, "task list cleared, terminating.")
-				}
-				return
-			} else {
-
-				if *loglevelPtr > 3 {
-					w.Println(id, "Got stop signal, terminating.")
-				}
-				return
-			}
-		default:
-			continue
 		}
 	}
 }
@@ -197,9 +199,27 @@ func controller(kanal chan socialNetwork.Task, quitChan chan int) {
 func main() {
 	var tPtr = flag.Int("t", 10, "delay between tasks")
 	flag.Parse()
+
+	flag.Parse()
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+
 	fmt.Println("Logging level of:", *loglevelPtr)
 	fmt.Println("Polling of controller:", *pollingPtr)
 	fmt.Println("Max number of workers:", *maxWorkersPtr)
+	fmt.Println("Number of map shards:", *shardNumPtr)
+
+	slovArr = make([]map[string][]uint64, *shardNumPtr)
+	for i := 0; i < *shardNumPtr; i++ {
+		slovArr[i] = make(map[string][]uint64)
+	}
+	slovarLock = make([]sync.Mutex, *shardNumPtr)
 	// Definiramo nov generator
 	var producer socialNetwork.Q
 	// Inicializiramo generator. Parameter določa zakasnitev med zahtevki
