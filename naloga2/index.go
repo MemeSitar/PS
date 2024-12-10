@@ -7,7 +7,6 @@ import (
 	"os"
 	"q-index/socialNetwork"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 )
@@ -38,69 +37,6 @@ type Slovar struct {
 type Entry struct {
 	Id   uint64
 	Word string
-}
-
-func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
-	defer wg.Done()
-	var current socialNetwork.Task
-	todo := make([][]Entry, *shardNumPtr)
-	for {
-		select {
-		case <-stop:
-			if *loglevelPtr > 3 {
-				w.Println(id, "got stop signal, clearing task list.")
-			}
-			for x, arr := range todo {
-				if len(arr) > 0 {
-					slovar.lock[x].Lock()
-					if *loglevelPtr > 3 {
-						w.Println(id, "successfully locked shard", x, "copying:", len(arr))
-					}
-					for len(arr) > 0 {
-						popped := arr[len(arr)-1]
-						slovar.arr[x][popped.Word] = append(slovar.arr[x][popped.Word], popped.Id)
-						arr = arr[:len(arr)-1]
-					}
-					if *loglevelPtr > 3 {
-						w.Println(id, "unlocking shard", x, "current:", len(arr))
-					}
-					slovar.lock[x].Unlock()
-					todo[x] = make([]Entry, 0)
-				}
-			}
-			return
-		default:
-
-		}
-		current = <-kanal
-		if *loglevelPtr > 5 {
-			w.Println(id, "processing task", current.Id)
-		}
-		currentShard := current.Id % uint64(*shardNumPtr)
-		// spucaj stringe
-		words := re.FindAllString(current.Data, -1)
-		// čez vse besede tolower in dodaj v slovar
-		for _, word := range words {
-			word = strings.ToLower(word)
-			todo[currentShard] = append(todo[currentShard], Entry{current.Id, word})
-		}
-		for x, arr := range todo {
-			if len(arr) > 0 && slovar.lock[x].TryLock() {
-				if *loglevelPtr > 4 {
-					w.Println(id, "successfully locked shard", x, "copying:", len(arr))
-				}
-				for len(arr) > 0 {
-					popped := arr[len(arr)-1]
-					slovar.arr[x][popped.Word] = append(slovar.arr[x][popped.Word], popped.Id)
-					arr = arr[:len(arr)-1]
-				}
-				slovar.lock[x].Unlock()
-				todo[x] = make([]Entry, 0)
-			} else if *loglevelPtr > 4 && len(arr) > 0 {
-				w.Println(id, "couldn't lock shard", x, "keeping:", len(arr))
-			}
-		}
-	}
 }
 
 func controller(kanal chan socialNetwork.Task, quit chan int) {
