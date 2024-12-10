@@ -46,6 +46,7 @@ func controller(kanal chan socialNetwork.Task, quit chan int) {
 	var stop = make(chan int)
 	var WP = WorkerPool{0, 0, *maxWorkersPtr, stop, kanal}
 	WP.addWorker(1)
+	countZero := 0
 
 	// start the main loop
 	prev := 0
@@ -73,6 +74,11 @@ func controller(kanal chan socialNetwork.Task, quit chan int) {
 					c.Printf("current diff: %5d current len: %d\n", diff, tmp)
 				}
 			}
+			if tmp < 100 {
+				countZero++
+			} else {
+				countZero = 0
+			}
 			if timer > 0 {
 				timer--
 			}
@@ -97,6 +103,9 @@ func controller(kanal chan socialNetwork.Task, quit chan int) {
 			}
 			timer = 5
 			WP.removeWorker(diff / 500 * -1)
+		} else if countZero > 8 {
+			WP.removeWorker(5)
+			countZero = 0
 		}
 
 	}
