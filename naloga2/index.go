@@ -23,6 +23,7 @@ var maxWorkersPtr = flag.Int("wmax", 80, "max number of workers")
 var shardNumPtr = flag.Int("shards", 1, "number of shards")
 var tPtr = flag.Int("t", 10, "delay between tasks")
 
+// global variables
 var wg sync.WaitGroup
 var re = regexp.MustCompile(`\b[a-zA-Z0-9]{4,}\b`)
 var w = log.New(os.Stderr, "WORKER: ", 0)
@@ -75,13 +76,13 @@ func worker(id int, kanal chan socialNetwork.Task, stop chan int) {
 		if *loglevelPtr > 5 {
 			w.Println(id, "processing task", current.Id)
 		}
-
+		currentShard := current.Id % uint64(*shardNumPtr)
 		// spucaj stringe
 		words := re.FindAllString(current.Data, -1)
 		// čez vse besede tolower in dodaj v slovar
 		for _, word := range words {
 			word = strings.ToLower(word)
-			todo[current.Id%uint64(*shardNumPtr)] = append(todo[current.Id%uint64(*shardNumPtr)], Entry{current.Id, word})
+			todo[currentShard] = append(todo[currentShard], Entry{current.Id, word})
 		}
 		for x, arr := range todo {
 			if len(arr) > 0 && slovar.lock[x].TryLock() {
@@ -168,45 +169,42 @@ func controller(kanal chan socialNetwork.Task, quit chan int) {
 func main() {
 	flag.Parse()
 	printFlags()
+
 	slovar = Slovar{make([]map[string][]uint64, *shardNumPtr), make([]sync.Mutex, *shardNumPtr)}
 	slovar.arr = make([]map[string][]uint64, *shardNumPtr)
+	slovar.lock = make([]sync.Mutex, *shardNumPtr)
 	for i := 0; i < *shardNumPtr; i++ {
 		slovar.arr[i] = make(map[string][]uint64)
 	}
-	slovar.lock = make([]sync.Mutex, *shardNumPtr)
+
 	// Definiramo nov generator
 	var producer socialNetwork.Q
-	// Inicializiramo generator. Parameter določa zakasnitev med zahtevki
-
 	producer.New(*tPtr * 100)
 
+	// ustvarimo kontroler
 	var stopController = make(chan int)
 	go controller(producer.TaskChan, stopController)
 
 	start := time.Now()
-	// Zaženemo generator
 	go producer.Run()
-	// Počakamo 5 sekund
 	time.Sleep(time.Second * 5)
-	// Ustavimo generator
 	producer.Stop()
-	// Počakamo, da se vrsta sprazni
 	for !producer.QueueEmpty() {
 	}
 	elapsed := time.Since(start)
-	fmt.Println("STOPPING CONTROLLER")
+
+	// ustavimo kontroler in počakamo da se vsi delavci spraznijo in ugasnejo
 	stopController <- 1
 	wg.Wait()
 
-	// Izpišemo število generiranih zahtevkov na sekundo
+	// Izpišemo generirani zahtevki/sekundo, povprečno dolžino vrste in največjo dolžino vrste
 	fmt.Printf("Processing rate: %f MReqs/s\n", float64(producer.N)/float64(elapsed.Seconds())/1000000.0)
-	// Izpišemo povprečno dolžino vrste v čakalnici
 	fmt.Printf("Average queue length: %.2f %%\n", producer.GetAverageQueueLength())
-	// Izpišemo največjo dolžino vrste v čakalnici
 	fmt.Printf("Max queue length %.2f %%\n", producer.GetMaxQueueLength())
 
+	// če debug izpišemo še rezultate in query za "zero"
 	if *loglevelPtr == -1 {
-		printResults()
+		//printResults()
 		fmt.Println(query("zero"))
 	}
 }
